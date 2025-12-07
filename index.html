@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Daily Warehouse - 每日倉庫番</title>
+<style>
+  /* --- 基礎樣式 --- */
+  body { font-family: 'Segoe UI', sans-serif; background-color: #2c3e50; color: white; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; min-height: 100vh; margin: 0; padding-top: 20px; }
+  h1 { margin: 10px 0; font-size: 24px; }
+  
+  /* --- 說明與控制項 --- */
+  #instructions, .controls { 
+      max-width: 400px; 
+      padding: 10px; 
+      margin-bottom: 20px;
+      background: #34495e; 
+      border-radius: 8px;
+  }
+  
+  #instructions h3 { margin-top: 0; color: #f1c40f; }
+  .controls { text-align: center; }
+  
+  button { 
+      padding: 8px 16px; margin: 5px; cursor: pointer; 
+      background: #e67e22; border: none; color: white; 
+      border-radius: 4px; font-size: 14px; 
+      transition: background 0.2s;
+  }
+  button:hover { background: #d35400; }
+  /* 修正：增加 active 樣式 */
+  button.active { 
+      background: #d35400; 
+      border: 2px solid #fff;
+  }
+  
+  /* --- 遊戲地圖 --- */
+  #game-container {
+    display: grid;
+    gap: 2px;
+    background: #34495e;
+    padding: 10px;
+    border-radius: 8px;
+    box-shadow: 0 10px 20px rgba(0,0,0,0.3);
+  }
+  
+  .cell {
+    width: 30px; height: 30px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 20px;
+    border-radius: 4px;
+    transition: background-color 0.1s;
+  }
+  
+  /* 圖塊樣式 */
+  .wall { background-color: #95a5a6; } 
+  .floor { background-color: #ecf0f1; } 
+  .target { background-color: #e74c3c; opacity: 0.6; } 
+  
+  /* 實體層 (用 CSS 疊加圖示) */
+  .player { position: relative; }
+  .player::after { content: '👷'; position: absolute; font-size: 22px; }
+  
+  .box { position: relative; }
+  .box::after { content: '📦'; position: absolute; font-size: 22px; }
+  
+  .box-on-target { position: relative; }
+  .box-on-target::after { content: '✅'; position: absolute; font-size: 22px; }
+
+  #status { margin-top: 15px; font-weight: bold; color: #f1c40f; min-height: 24px;}
+  
+  /* 手機版方向鍵 */
+  .d-pad { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 5px; }
+  .d-btn { width: 50px; height: 50px; background: #7f8c8d; border-radius: 50%; font-size: 24px; display: flex; align-items: center; justify-content: center; user-select: none; cursor: pointer;}
+  .d-btn:active { background: #95a5a6; }
+</style>
+</head>
+<body>
+
+<h1>每日倉庫番</h1>
+
+<div id="instructions">
+    <h3>遊戲說明與規則</h3>
+    <ul>
+        <li><strong>目標：</strong> 將所有的箱子 (📦) 推到目標點 (紅色底 🟥) 上。當所有箱子都變成 ✅ 符號時，即可過關。</li>
+        <li><strong>控制：</strong> 使用鍵盤方向鍵 (↑↓←→) 或下方的 D-pad 按鈕移動工人 (👷)。</li>
+        <li><strong>重要規則：</strong>
+            <ul>
+                <li>❌ 一次只能推動一個箱子。</li>
+                <li>❌ 無法推動箱子穿越牆壁 (灰色塊 🧱) 或另一個箱子。</li>
+                <li>❌ 無法拉動箱子。</li>
+            </ul>
+        </li>
+        <li><strong>每日挑戰：</strong> 每天的關卡配置都是固定的，您可以與朋友比較步數！</li>
+    </ul>
+</div>
+
+<div class="controls">
+  <button onclick="setDifficulty('EASY')" id="btn-easy">簡易</button>
+  <button onclick="setDifficulty('NORMAL')" id="btn-normal">普通</button>
+  <button onclick="setDifficulty('HARD')" id="btn-hard">困難</button>
+  <button onclick="initGame()" style="background-color: #27ae60;">重置</button>
+</div>
+
+<div id="game-container"></div>
+<div id="status"></div>
+
+<div class="d-pad">
+    <div></div><div class="d-btn" onclick="movePlayer(0, -1)">⬆️</div><div></div>
+    <div class="d-btn" onclick="movePlayer(-1, 0)">⬅️</div><div class="d-btn" onclick="movePlayer(0, 1)">⬇️</div><div class="d-btn" onclick="movePlayer(1, 0)">➡️</div>
+</div>
+
+<script>
+// 遊戲參數
+const LEVELS = {
+    EASY: { size: 8, boxes: 2, steps: 30 },
+    NORMAL: { size: 10, boxes: 3, steps: 60 },
+    HARD: { size: 12, boxes: 5, steps: 120 }
+};
+
+let currentDiff = 'NORMAL';
+let grid = [];
+let playerPos = {x: 0, y: 0};
+let mapSize = 0;
+let rng; // 隨機生成器
+let moveCount = 0;
+
+// 偽隨機數生成器 (確保每日相同)
+function createRNG(seed) {
+    return function() {
+        seed = (seed * 9301 + 49297) % 233280;
+        return seed / 233280;
+    };
+}
+
+// 修正：更新按鈕視覺狀態
+function updateDifficultyButtons() {
+    ['EASY', 'NORMAL', 'HARD'].forEach(diff => {
+        const btn = document.getElementById(`btn-${diff.toLowerCase()}`);
+        if (btn) {
+            if (diff === currentDiff) {
+                btn.classList.add('active');
+            } else {
+                btn.classList.remove('active');
+            }
+        }
+    });
+}
+
+function setDifficulty(diff) {
+    currentDiff = diff;
+    updateDifficultyButtons();
+    initGame();
+}
+
+function initGame() {
+    const today = new Date();
+    // 每日種子 + 難度係數
+    const seedBase = parseInt(today.getFullYear() + "" + String(today.getMonth()+1).padStart(2, '0') + "" + String(today.getDate()).padStart(2, '0'));
+    const diffSeed = currentDiff === 'EASY' ? 1 : (currentDiff === 'NORMAL' ? 2 : 3);
+    rng = createRNG(seedBase + diffSeed);
+
+    generateLevel(LEVELS[currentDiff]);
+    moveCount = 0;
+    document.getElementById('status').innerText = `步數: ${moveCount} | Level: ${today.toLocaleDateString()} [${currentDiff}]`;
+    render();
+}
+
+// 核心演算法：逆向生成 (邏輯與前次版本相同，確保有解)
+function generateLevel(config) {
+    mapSize = config.size;
+    grid = [];
+
+    // 1. 初始化地圖
+    for(let y=0; y<mapSize; y++) {
+        let row = [];
+        for(let x=0; x<mapSize; x++) row.push('#'); 
+        grid.push(row);
+    }
+
+    // 2. 挖出一個房間
+    let innerSize = mapSize - 2;
+    for(let y=1; y<=innerSize; y++) {
+        for(let x=1; x<=innerSize; x++) {
+            grid[y][x] = '.'; 
+        }
+    }
+
+    // 3. 隨機放置目標點 (Targets)
+    let targets = [];
+    while(targets.length < config.boxes) {
+        let tx = Math.floor(rng() * innerSize) + 1;
+        let ty = Math.floor(rng() * innerSize) + 1;
+        if(!targets.some(t => t.x === tx && t.y === ty)) {
+            targets.push({x: tx, y: ty});
+            grid[ty][tx] = 'T'; 
+        }
+    }
+
+    // 4. 放置玩家 (隨機找空地)
+    while(true) {
+        let px = Math.floor(rng() * innerSize) + 1;
+        let py = Math.floor(rng() * innerSize) + 1;
+        if(grid[py][px] === '.') {
+            playerPos = {x: px, y: py};
+            break;
+        }
+    }
+
+    // 5. 初始狀態：箱子都在目標點上
+    let boxes = JSON.parse(JSON.stringify(targets)); 
+    
+    // 6. 逆向拉動 (Reverse Play)
+    for(let i=0; i<config.steps; i++) {
+        let boxIdx = Math.floor(rng() * boxes.length);
+        let box = boxes[boxIdx];
+        
+        let dirs = [{x:0, y:-1}, {x:1, y:0}, {x:0, y:1}, {x:-1, y:0}];
+        dirs.sort(() => rng() - 0.5);
+        
+        for(let d of dirs) {
+            let pullDestX = box.x + d.x;
+            let pullDestY = box.y + d.y;
+            let playerDestX = box.x + d.x * 2;
+            let playerDestY = box.y + d.y * 2;
+            
+            function isValid(x, y) {
+                return x >= 0 && x < mapSize && y >= 0 && y < mapSize && grid[y][x] !== '#';
+            }
+
+            function isBoxAt(x, y, boxList) {
+                return boxList.some(b => b.x === x && b.y === y);
+            }
+
+            if(isValid(pullDestX, pullDestY) && isValid(playerDestX, playerDestY)) {
+                if(!isBoxAt(pullDestX, pullDestY, boxes) && !isBoxAt(playerDestX, playerDestY, boxes)) {
+                    boxes[boxIdx].x = pullDestX;
+                    boxes[boxIdx].y = pullDestY;
+                    playerPos = {x: playerDestX, y: playerDestY}; 
+                    break;
+                }
+            }
+        }
+    }
+
+    window.currentBoxes = boxes;
+}
+
+function render() {
+    const container = document.getElementById('game-container');
+    container.innerHTML = '';
+    container.style.gridTemplateColumns = `repeat(${mapSize}, 30px)`;
+
+    for(let y=0; y<mapSize; y++) {
+        for(let x=0; x<mapSize; x++) {
+            let div = document.createElement('div');
+            let type = grid[y][x];
+            let className = 'cell ';
+            
+            if(type === '#') className += 'wall';
+            else if(type === 'T') className += 'target';
+            else className += 'floor';
+            
+            if(x === playerPos.x && y === playerPos.y) className += ' player';
+            
+            let boxIdx = window.currentBoxes.findIndex(b => b.x === x && b.y === y);
+            if(boxIdx !== -1) {
+                if(type === 'T') className += ' box-on-target';
+                else className += ' box';
+            }
+            
+            div.className = className;
+            container.appendChild(div);
+        }
+    }
+    
+    document.getElementById('status').innerText = `步數: ${moveCount} | Level: ${new Date().toLocaleDateString()} [${currentDiff}]`;
+    checkWin();
+}
+
+function movePlayer(dx, dy) {
+    // 檢查是否已勝利
+    let allOnTarget = window.currentBoxes.every(b => grid[b.y][b.x] === 'T');
+    if(allOnTarget) return;
+
+    const nextX = playerPos.x + dx;
+    const nextY = playerPos.y + dy;
+    
+    if(grid[nextY][nextX] === '#') return; 
+
+    let boxIdx = window.currentBoxes.findIndex(b => b.x === nextX && b.y === nextY);
+    
+    if(boxIdx !== -1) {
+        // 推箱子
+        const boxNextX = nextX + dx;
+        const boxNextY = nextY + dy;
+        
+        // 箱子前面是牆或另一個箱子
+        if(grid[boxNextY][boxNextX] === '#' || window.currentBoxes.some((b, i) => i !== boxIdx && b.x === boxNextX && b.y === boxNextY)) {
+            return;
+        }
+        
+        // 移動箱子
+        window.currentBoxes[boxIdx].x = boxNextX;
+        window.currentBoxes[boxIdx].y = boxNextY;
+    }
+    
+    // 移動玩家
+    playerPos.x = nextX;
+    playerPos.y = nextY;
+    moveCount++;
+    render();
+}
+
+function checkWin() {
+    let allOnTarget = window.currentBoxes.every(b => grid[b.y][b.x] === 'T');
+    if(allOnTarget) {
+        document.getElementById('status').innerText = `🎉 恭喜完成！總步數: ${moveCount}`;
+        document.getElementById('status').style.color = "#2ecc71";
+    } else {
+        document.getElementById('status').style.color = "#f1c40f";
+    }
+}
+
+// 鍵盤控制
+document.addEventListener('keydown', (e) => {
+    let dx = 0;
+    let dy = 0;
+    if(e.key === 'ArrowUp' || e.key === 'w') dy = -1;
+    else if(e.key === 'ArrowDown' || e.key === 's') dy = 1;
+    else if(e.key === 'ArrowLeft' || e.key === 'a') dx = -1;
+    else if(e.key === 'ArrowRight' || e.key === 'd') dx = 1;
+    
+    if (dx !== 0 || dy !== 0) {
+        e.preventDefault(); // 阻止頁面滾動
+        movePlayer(dx, dy);
+    }
+});
+
+// 啟動遊戲
+setDifficulty('NORMAL'); // 預設啟動普通模式
+
+</script>
+</body>
+</html>
